@@ -1,0 +1,12 @@
+# Record kinds this server accepts. One per line.
+# Blank lines and lines starting with # are ignored.
+
+daily
+monthly
+future
+collection
+audit
+scorecard_question
+scorecard_answer
+collection_template
+collection_entry
