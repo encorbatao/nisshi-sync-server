@@ -91,6 +91,7 @@ is to the server.
 | GET  | `/api/sync?since=` | Bearer | — | Records changed since the cursor |
 | POST | `/api/sync` | Bearer | `{records:[EncryptedRecord]}` | Upsert (LWW) |
 | POST | `/api/sync/purge` | Bearer | `{records:[{kind,id}]}` | Hard-delete |
+| DELETE | `/api/account` | Bearer | — | Hard-delete the account and all its records; returns `{deleted, records}` |
 | GET  | `/api/health` | — | — | Liveness |
 
 `EncryptedRecord = {kind, id, updated_at, deleted, payload, v}` — `payload` is a

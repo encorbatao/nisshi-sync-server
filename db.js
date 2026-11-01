@@ -46,6 +46,8 @@ function initDb(dbPath) {
       ON CONFLICT(account_id, kind, id) DO UPDATE SET
         updated_at=@updated_at, deleted=@deleted, payload=@payload, seq=@seq`),
     purge:     db.prepare("DELETE FROM records WHERE account_id = ? AND kind = ? AND id = ?"),
+    purgeAccountRecords: db.prepare("DELETE FROM records WHERE account_id = ?"),
+    deleteAccount:       db.prepare("DELETE FROM accounts WHERE account_id = ?"),
     // Monotonic global sequence generator. Bump then read, inside the push
     // transaction, so a rolled-back push also rolls back the counter.
     bumpSeq:   db.prepare("UPDATE counters SET v = v + 1 WHERE name = 'record_seq'"),
