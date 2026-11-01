@@ -93,7 +93,9 @@ function createApp({ db, stmts, config }) {
     const header = req.get("authorization") || "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
     const aid = verifyToken(token);
-    if (!aid) return res.status(401).json({ error: "Unauthorized" });
+    // Tokens are stateless, so one issued before the account was deleted still
+    // verifies. Without this lookup it would keep pushing and recreate the data.
+    if (!aid || !stmts.getAccount.get(aid)) return res.status(401).json({ error: "Unauthorized" });
     req.accountId = aid;
     next();
   }
@@ -147,6 +149,19 @@ function createApp({ db, stmts, config }) {
     });
     tx();
     res.json({ serverTime: nowISO(), purged });
+  });
+
+  // ── Delete account ─────────────────────────────────────────────────────────
+  // Hard-deletes every record and the account itself, in one transaction. Any
+  // outstanding token is rejected afterwards by requireAuth's account lookup.
+  app.delete("/api/account", requireAuth, (req, res) => {
+    let records = 0;
+    const tx = db.transaction(() => {
+      records = stmts.purgeAccountRecords.run(req.accountId).changes;
+      stmts.deleteAccount.run(req.accountId);
+    });
+    tx();
+    res.json({ deleted: true, records });
   });
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));

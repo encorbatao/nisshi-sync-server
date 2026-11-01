@@ -49,4 +49,12 @@ async function get(baseUrl, p, token) {
   return { status: res.status, json };
 }
 
-module.exports = { startApp, post, get };
+async function del(baseUrl, p, token) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(baseUrl + p, { method: "DELETE", headers });
+  const json = await res.json().catch(() => ({}));
+  return { status: res.status, json };
+}
+
+module.exports = { startApp, post, get, del };
