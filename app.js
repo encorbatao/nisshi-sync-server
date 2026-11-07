@@ -43,18 +43,44 @@ function createApp({ db, stmts, config }) {
 
   const app = express();
   app.set("trust proxy", 1);
-  app.use(express.json({ limit: "8mb" }));
+  app.disable("x-powered-by");
+
+  // Security headers set by the app itself, so they hold even if the proxy in front
+  // changes. It's a JSON API: nothing may be framed, sniffed, or loaded from it.
+  app.use((_req, res, next) => {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    next();
+  });
   if (!config.quiet) app.use((req, _res, next) => { console.log(`${nowISO()} ${req.method} ${req.path}`); next(); });
 
+  const noLimit = (_req, _res, next) => next();
+  // Every route: a generous per-IP ceiling against floods (unauthenticated included).
+  const globalLimiter = config.disableRateLimit
+    ? noLimit
+    : rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false,
+        message: { error: "Too many requests, slow down" } });
   const authLimiter = config.disableRateLimit
-    ? (_req, _res, next) => next()
+    ? noLimit
     : rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
         message: { error: "Too many attempts, try again later" } });
+  app.use(globalLimiter);
+
+  // Bodies are parsed per route, never globally: enroll/login only need a few hundred
+  // bytes, and the large limit applies only *after* requireAuth, so an unauthenticated
+  // client can't make the server buffer and parse megabytes.
+  const smallJson = express.json({ limit: "16kb" });
+  const bigJson   = express.json({ limit: "8mb" });
+  // Burned on login misses so an unknown account costs the same work as a wrong secret.
+  const DUMMY_HASH = sha256hex(crypto.randomBytes(32));
 
   // ── Enroll ────────────────────────────────────────────────────────────────
   // Join with the shared enrollment code. Idempotent: re-enrolling an existing
   // account with the same secret returns a fresh token and `created:false`.
-  app.post("/api/enroll", authLimiter, (req, res) => {
+  app.post("/api/enroll", authLimiter, smallJson, (req, res) => {
     const { accountId, accountSecret, enrollmentCode } = req.body || {};
     if (!isValidAccountId(accountId) || !isValidSecret(accountSecret))
       return res.status(400).json({ error: "Invalid account credentials" });
@@ -77,12 +103,13 @@ function createApp({ db, stmts, config }) {
   });
 
   // ── Login ─────────────────────────────────────────────────────────────────
-  app.post("/api/login", authLimiter, (req, res) => {
+  app.post("/api/login", authLimiter, smallJson, (req, res) => {
     const { accountId, accountSecret } = req.body || {};
     if (!isValidAccountId(accountId) || !isValidSecret(accountSecret))
       return res.status(400).json({ error: "Invalid account credentials" });
     const acct = stmts.getAccount.get(accountId);
-    if (!acct || !constantTimeEqual(acct.secret_hash, sha256hex(accountSecret)))
+    const secretOk = constantTimeEqual(acct ? acct.secret_hash : DUMMY_HASH, sha256hex(accountSecret));
+    if (!acct || !secretOk)
       return res.status(401).json({ error: "Unknown account or wrong secret" });
 
     res.json({ token: signToken(accountId), serverTime: nowISO() });
@@ -116,7 +143,7 @@ function createApp({ db, stmts, config }) {
     res.json({ serverTime: String(cursor), records });
   });
 
-  app.post("/api/sync", requireAuth, (req, res) => {
+  app.post("/api/sync", requireAuth, bigJson, (req, res) => {
     const records = Array.isArray(req.body?.records) ? req.body.records : [];
     let applied = 0, skipped = 0, rejected = 0;
     const lww = (existing, incomingUpdatedAt) => !existing || incomingUpdatedAt > existing.updated_at;
@@ -138,7 +165,7 @@ function createApp({ db, stmts, config }) {
     res.json({ serverTime: String(stmts.getSeq.get().v), applied, skipped, rejected });
   });
 
-  app.post("/api/sync/purge", requireAuth, (req, res) => {
+  app.post("/api/sync/purge", requireAuth, bigJson, (req, res) => {
     const records = Array.isArray(req.body?.records) ? req.body.records : [];
     let purged = 0;
     const tx = db.transaction(() => {
@@ -167,6 +194,15 @@ function createApp({ db, stmts, config }) {
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
   // Last-resort handler: a thrown route error returns 500 instead of hanging the client.
+  app.use((_req, res) => res.status(404).json({ error: "Not found" }));
+
+  // Client-side body problems are 4xx, not server errors.
+  app.use((err, _req, res, next) => {
+    if (err && err.type === "entity.parse.failed") return res.status(400).json({ error: "Malformed JSON" });
+    if (err && err.type === "entity.too.large")   return res.status(413).json({ error: "Payload too large" });
+    next(err);
+  });
+
   app.use((err, _req, res, _next) => {
     if (!config.quiet) console.error(err);
     if (!res.headersSent) res.status(500).json({ error: "Internal error" });

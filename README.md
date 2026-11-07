@@ -77,6 +77,7 @@ is to the server.
 | Var | Required | Default | Notes |
 |---|---|---|---|
 | `PORT` | no | `4100` | |
+| `HOST` | no | `127.0.0.1` | Bind address. Keep loopback behind a reverse proxy/tunnel; `0.0.0.0` exposes the port directly. |
 | `DB_PATH` | no | `./vault.db` | SQLite file |
 | `ENROLLMENT_SECRET` | **yes** | — | Shared join code |
 | `TOKEN_SECRET` | **yes** | — | HMAC signing key for session tokens |
